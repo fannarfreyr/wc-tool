@@ -5,78 +5,148 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
+	"log"
 	"os"
-	"strings"
+	"path/filepath"
+	"unicode"
 )
 
-func countBytes(filePath string) {
+type ProgramOptions struct {
+	numberOfBytes      bool
+	numberOfLines      bool
+	numberOfWords      bool
+	numberOfCharacters bool
 }
 
+type Result struct {
+	fileName           string
+	numberOfBytes      uint64
+	numberOfLines      uint64
+	numberOfWords      uint64
+	numberOfCharacters uint64
+}
+
+var ProgramName = filepath.Base(os.Args[0])
+
 func main() {
-	// Define flags
-	filePathCountBytes := flag.String("c", "", "")
-	countLines := flag.String("l", "", "")
-	countWords := flag.String("w", "", "")
+	var options ProgramOptions
+	numberOfBytes := flag.Bool("c", false, "Used to count number of bytes in the file")
+	numberOfLines := flag.Bool("l", false, "Used to count number of lines in the file")
+	numberOfWords := flag.Bool("w", false, "Used to count number of words in the file")
+	numberOfCharacters := flag.Bool("m", false, "used to count number of characters in the file")
 
-	// Parse the command-line flags
 	flag.Parse()
-
-	// Check if -c flag was set
-	if *filePathCountBytes == "" && *countLines == "" && *countWords == "" {
-		fmt.Println("Usage: ")
-		fmt.Println("  -c <file_path> : Get file size in bytes")
-		fmt.Println("  -l <file_path> : Count number of lines in the file")
-		fmt.Println("  -w <filw_path> : Count number of words in a file")
-		os.Exit(1)
+	if *numberOfBytes {
+		options.numberOfBytes = true
+	}
+	if *numberOfLines {
+		options.numberOfLines = true
+	}
+	if *numberOfWords {
+		options.numberOfWords = true
+	}
+	if *numberOfCharacters {
+		options.numberOfCharacters = true
 	}
 
-	// Handle -c flage (byte count)
-	if *filePathCountBytes != "" {
-		fileInfo, err := os.Stat(*filePathCountBytes)
+	if !options.numberOfBytes && !options.numberOfLines && !options.numberOfCharacters && !options.numberOfWords {
+		options.numberOfBytes, options.numberOfLines, options.numberOfWords = true, true, true
+	}
+
+	if filename := flag.Arg(0); filename != "" {
+		result := processFile(&options, filename)
+		fmt.Println(formatOutput(&result, &options))
+	} else {
+		processStdin(&options)
+	}
+}
+
+func processStdin(options *ProgramOptions) {
+	reader := bufio.NewReader(os.Stdin)
+	result := Result{}
+
+	calculate(reader, &result, options)
+	fmt.Println(formatOutput(&result, options))
+}
+
+func processFile(options *ProgramOptions, filename string) Result {
+	result := Result{}
+
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	defer func(file *os.File) {
+		err := file.Close()
 		if err != nil {
-			fmt.Println("Error accessing file:", err)
-			os.Exit(1)
 		}
-		fmt.Println(fileInfo.Size())
-	}
+	}(file)
+	result.fileName = filename
 
-	// Handle -l flag (line count)
-	if *countLines != "" || *countWords != "" {
-		var filePath string
-		if *countLines != "" {
-			filePath = *countLines
-		} else {
-			filePath = *countWords
-		}
+	reader := bufio.NewReader(file)
+	calculate(reader, &result, options)
+	return result
+}
 
-		file, err := os.Open(*&filePath)
+func calculate(fileReader *bufio.Reader, results *Result, options *ProgramOptions) {
+	results.numberOfLines = 0
+	results.numberOfWords = 0
+	results.numberOfBytes = 0
+	results.numberOfCharacters = 0
+
+	var prevRune rune
+
+	for {
+		runeRead, runeSize, err := fileReader.ReadRune()
 		if err != nil {
-			fmt.Println("Error opening file:", err)
-			os.Exit(1)
+			if err == io.EOF {
+				break
+			}
+			log.Fatal(err.Error())
 		}
-		defer file.Close()
-
-		lineCount, wordCount := 0, 0
-		scanner := bufio.NewScanner(file)
-
-		for scanner.Scan() {
-			line := scanner.Text()
-			lineCount++
-			words := strings.Fields(line) // Splits the line into words
-			wordCount += len(words)
+		if options.numberOfBytes {
+			results.numberOfBytes += uint64(runeSize)
 		}
-
-		if err := scanner.Err(); err != nil {
-			fmt.Println("Error reading file:", err)
-			os.Exit(1)
+		if options.numberOfLines && runeRead == '\n' {
+			results.numberOfLines++
 		}
-
-		// Print results based on flags
-		if *countLines != "" {
-			fmt.Println(lineCount)
+		if options.numberOfCharacters {
+			results.numberOfCharacters++
 		}
-		if *countWords != "" {
-			fmt.Println(wordCount)
+		if options.numberOfWords {
+			if unicode.IsSpace(runeRead) && !unicode.IsSpace(prevRune) {
+				results.numberOfWords++
+			}
 		}
+		prevRune = runeRead
 	}
+	if prevRune != rune(0) && !unicode.IsSpace(prevRune) {
+		results.numberOfWords++
+	}
+}
+
+func formatOutput(results *Result, options *ProgramOptions) string {
+	output := ""
+
+	// -l
+	if options.numberOfLines {
+		output += fmt.Sprintf("%v\t", results.numberOfLines)
+	}
+	// -w
+	if options.numberOfWords {
+		output += fmt.Sprintf("%v\t", results.numberOfWords)
+	}
+	// -c
+	if options.numberOfBytes {
+		output += fmt.Sprintf("%v\t", results.numberOfBytes)
+	}
+	// -m
+	if options.numberOfCharacters {
+		output += fmt.Sprintf("%v\t", results.numberOfCharacters)
+	}
+	if results.fileName != "" && results.fileName != "-" {
+		output += fmt.Sprintf(results.fileName)
+	}
+	return output
 }
